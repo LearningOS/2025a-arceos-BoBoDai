@@ -2,9 +2,9 @@
 #![cfg_attr(feature = "axstd", no_main)]
 
 #[cfg(feature = "axstd")]
-use axstd::println;
+use axstd::with_color;
 
 #[cfg_attr(feature = "axstd", no_mangle)]
 fn main() {
-    println!("[WithColor]: Hello, Arceos!");
+    with_color!(31, "[WithColor]: Hello, Arceos!");
 }
