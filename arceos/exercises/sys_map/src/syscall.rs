@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
-use core::ffi::{c_void, c_char, c_int};
-use axhal::arch::TrapFrame;
-use axhal::trap::{register_trap_handler, SYSCALL};
+use alloc::vec;
+use alloc::vec::Vec;
+use arceos_posix_api as api;
+use arceos_posix_api::get_file_like;
 use axerrno::LinuxError;
+use axhal::arch::TrapFrame;
+use axhal::paging::MappingFlags;
+use axhal::trap::{register_trap_handler, SYSCALL};
 use axtask::current;
 use axtask::TaskExtRef;
-use axhal::paging::MappingFlags;
-use arceos_posix_api as api;
+use core::ffi::{c_char, c_int, c_void};
+use memory_addr::{MemoryAddr, VirtAddr, VirtAddrRange};
 
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
@@ -131,16 +135,63 @@ fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ret
 }
 
-#[allow(unused_variables)]
 fn sys_mmap(
     addr: *mut usize,
     length: usize,
     prot: i32,
     flags: i32,
     fd: i32,
-    _offset: isize,
+    offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+
+    ax_println!(
+        "sys_mmap: addr={:p}, length={:#x}, prot={}, flags={}, fd={:#x}, offset={:#x}",
+        addr,
+        length,
+        prot,
+        flags,
+        fd,
+        offset
+    );
+
+    let task = current();
+    let mut uspace = task.task_ext().aspace.lock();
+
+    let start = VirtAddr::from_mut_ptr_of(addr);
+    let Some(area) = uspace.find_free_area(
+        start,
+        length.align_up_4k(),
+        VirtAddrRange::from_start_size(uspace.base(), uspace.size()),
+    ) else {
+        return -1;
+    };
+
+    let mmap_prot = MmapProt::from_bits_truncate(prot);
+    match uspace.map_alloc(
+        area,
+        length.align_up_4k(),
+        MappingFlags::from(mmap_prot),
+        true,
+    ) {
+        Ok(_) => {}
+        Err(_) => return -1,
+    }
+
+    let file = match get_file_like(fd) {
+        Ok(file) => file,
+        Err(_) => return -1,
+    };
+
+    let mut buf: Vec<u8> = vec![0; length];
+    match file.read(&mut buf) {
+        Ok(_) => {}
+        Err(_) => return -1,
+    }
+
+    match uspace.write(area, &buf) {
+        Ok(_) => area.as_usize() as isize,
+        Err(_) => -1,
+    }
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
